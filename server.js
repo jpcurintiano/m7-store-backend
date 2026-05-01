@@ -55,11 +55,18 @@ app.post("/create-payment", async (req, res) => {
         transaction_amount: PRECO,
         description: "Pacote Streaming - M7 Store",
         payment_method_id: "pix",
+
         payer: {
-          email,
+          email: "TESTUSER1939228236894082313@testuser.com",
           first_name: "Cliente",
-          last_name: "M7 Store",
+          last_name: "Teste",
+          identification: {
+            type: "CPF",
+            number: "19119119100",
+          },
         },
+
+        external_reference: email,
       },
       {
         headers: {
@@ -79,6 +86,7 @@ app.post("/create-payment", async (req, res) => {
       status: data.status,
       hasQrCode: Boolean(transactionData?.qr_code),
       hasQrBase64: Boolean(transactionData?.qr_code_base64),
+      emailClienteReal: email,
     });
 
     if (!transactionData?.qr_code || !transactionData?.qr_code_base64) {
@@ -133,17 +141,18 @@ app.post("/webhook", async (req, res) => {
     console.log("Webhook recebido:", {
       id: payment.id,
       status: payment.status,
-      email: payment.payer?.email,
+      emailMercadoPago: payment.payer?.email,
+      emailClienteReal: payment.external_reference,
     });
 
     if (payment.status !== "approved") {
       return res.sendStatus(200);
     }
 
-    const emailCliente = payment.payer?.email;
+    const emailCliente = payment.external_reference;
 
     if (!emailCliente) {
-      console.log("Pagamento aprovado, mas sem e-mail do cliente.");
+      console.log("Pagamento aprovado, mas sem e-mail real do cliente.");
       return res.sendStatus(200);
     }
 
