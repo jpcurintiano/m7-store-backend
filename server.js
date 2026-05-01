@@ -7,7 +7,7 @@ const cors = require("cors");
 
 const app = express();
 
-// 🔐 CORS (libera seu frontend da Vercel)
+// 🔐 CORS
 app.use(cors({
   origin: "https://m7-store.vercel.app",
   methods: ["GET", "POST"],
@@ -19,12 +19,12 @@ app.use(helmet());
 
 const preco = 29.9;
 
-// 🔹 Rota teste
+// ✅ TESTE
 app.get("/", (req, res) => {
   res.send("M7 Store API online");
 });
 
-// 🔥 CRIAR PAGAMENTO PIX
+// 💰 CRIAR PAGAMENTO PIX
 app.post("/create-payment", async (req, res) => {
   const { email } = req.body;
 
@@ -46,15 +46,16 @@ app.post("/create-payment", async (req, res) => {
     );
 
     const data = response.data;
+    const pixData = data.point_of_interaction?.transaction_data;
 
     res.json({
-      qr_code: data.point_of_interaction.transaction_data.qr_code,
-      qr_base64: data.point_of_interaction.transaction_data.qr_code_base64,
+      qr_code: pixData?.qr_code || null,
+      qr_base64: pixData?.qr_code_base64 || null,
       id: data.id
     });
 
   } catch (err) {
-    console.log("Erro ao criar pagamento:", err.response?.data || err.message);
+    console.log("ERRO MP:", err.response?.data || err.message);
 
     res.status(500).json({
       error: err.response?.data || err.message
@@ -62,7 +63,7 @@ app.post("/create-payment", async (req, res) => {
   }
 });
 
-// 🔁 WEBHOOK (confirma pagamento)
+// 🔁 WEBHOOK
 app.post("/webhook", async (req, res) => {
   try {
     if (req.body.type === "payment") {
@@ -95,8 +96,6 @@ app.post("/webhook", async (req, res) => {
           text: `
 Obrigado pela sua compra!
 
-Aqui estão seus dados de acesso:
-
 Login: seu@email.com
 Senha: 123456
 
@@ -104,14 +103,14 @@ Equipe M7 Store
           `
         });
 
-        console.log("✅ Produto enviado para:", emailCliente);
+        console.log("✅ Enviado para:", emailCliente);
       }
     }
 
     res.sendStatus(200);
 
   } catch (err) {
-    console.log("Erro no webhook:", err.message);
+    console.log("ERRO WEBHOOK:", err.message);
     res.sendStatus(500);
   }
 });
