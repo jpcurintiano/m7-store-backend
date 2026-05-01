@@ -9,29 +9,36 @@ const rateLimit = require("express-rate-limit");
 
 const app = express();
 
-// 🔥 TRUST PROXY (Render / Vercel)
+// 🔥 ESSENCIAL NO RENDER (resolve erro de proxy)
 app.set("trust proxy", 1);
 
-// ENV
+// 🔐 ENV
 const PORT = process.env.PORT || 3000;
-const FRONTEND_URL = process.env.FRONTEND_URL;
+const FRONTEND_URL = (process.env.FRONTEND_URL || "").replace(/\/$/, "");
+const BASE_URL = (process.env.BASE_URL || "").replace(/\/$/, "");
 const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN;
-const WEBHOOK_URL = process.env.WEBHOOK_URL;
+
+// 🔗 webhook automático
+const WEBHOOK_URL = `${BASE_URL}/webhook`;
 
 const PRECO = Number(process.env.PRECO || 29.9);
 const PRODUTO = process.env.PRODUTO || "Pacote de Streaming";
 
-// Segurança básica
+// 🛡️ Segurança
 app.use(helmet());
 app.use(express.json({ limit: "10kb" }));
 
 app.use(
   cors({
-    origin: FRONTEND_URL ? [FRONTEND_URL] : "*",
+    origin: FRONTEND_URL
+      ? [FRONTEND_URL, `${FRONTEND_URL}/`]
+      : "*",
+    methods: ["GET", "POST", "OPTIONS"],
+    allowedHeaders: ["Content-Type"],
   })
 );
 
-// 🔥 RATE LIMIT GLOBAL
+// 🚫 Rate limit global
 const globalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
@@ -39,14 +46,14 @@ const globalLimiter = rateLimit({
 
 app.use(globalLimiter);
 
-// 🔥 RATE LIMIT CRÍTICO (checkout)
+// 🚫 Rate limit pagamento
 const paymentLimiter = rateLimit({
   windowMs: 10 * 60 * 1000,
   max: 5,
   message: { error: "Muitas tentativas. Aguarde alguns minutos." },
 });
 
-// 🧠 ANTIFRAUDE SIMPLES (memória)
+// 🧠 antifraude simples
 const attempts = new Map();
 
 function checkFraud(ip, email) {
@@ -67,22 +74,20 @@ function checkFraud(ip, email) {
 
   data.count++;
 
-  if (data.count > 3) {
-    return true;
-  }
-
-  return false;
+  return data.count > 3;
 }
 
-// 🧾 VALIDAÇÕES
+// 📧 validar email
 function validarEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
+// 🪪 limpar CPF
 function limparCPF(cpf) {
   return String(cpf || "").replace(/\D/g, "");
 }
 
+// 🪪 validar CPF
 function validarCPF(cpf) {
   if (!cpf) return false;
 
@@ -112,7 +117,7 @@ function validarCPF(cpf) {
   return resto === Number(cpf[10]);
 }
 
-// 🏠 HEALTH CHECK
+// 🏠 rota base
 app.get("/", (req, res) => {
   res.json({
     status: "online",
@@ -120,7 +125,7 @@ app.get("/", (req, res) => {
   });
 });
 
-// 💰 CRIAR PAGAMENTO PIX
+// 💰 CRIAR PIX
 app.post("/create-payment", paymentLimiter, async (req, res) => {
   try {
     const ip = req.ip;
@@ -134,7 +139,6 @@ app.post("/create-payment", paymentLimiter, async (req, res) => {
       return res.status(400).json({ error: "CPF inválido" });
     }
 
-    // 🔥 antifraude
     if (checkFraud(ip, email)) {
       return res.status(429).json({
         error: "Comportamento suspeito detectado.",
@@ -197,7 +201,7 @@ app.post("/create-payment", paymentLimiter, async (req, res) => {
   }
 });
 
-// 🔍 STATUS
+// 🔍 verificar status
 app.get("/payment-status/:id", async (req, res) => {
   try {
     const response = await axios.get(
@@ -217,7 +221,7 @@ app.get("/payment-status/:id", async (req, res) => {
   }
 });
 
-// 🔔 WEBHOOK
+// 🔔 webhook
 app.post("/webhook", async (req, res) => {
   try {
     const paymentId =
@@ -240,8 +244,6 @@ app.post("/webhook", async (req, res) => {
 
     if (payment.status === "approved") {
       console.log("💰 PAGAMENTO APROVADO:", payment.id);
-
-      // 👉 AQUI você envia login/senha automático depois
     }
 
     res.sendStatus(200);
@@ -250,7 +252,7 @@ app.post("/webhook", async (req, res) => {
   }
 });
 
-// 🚀 START
+// 🚀 start
 app.listen(PORT, () => {
   console.log("Servidor rodando na porta", PORT);
 });
