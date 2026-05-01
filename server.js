@@ -7,7 +7,7 @@ const cors = require("cors");
 
 const app = express();
 
-// 🔐 CORS (libera seu site da Vercel)
+// 🔐 CORS (libera seu frontend da Vercel)
 app.use(cors({
   origin: "https://m7-store.vercel.app",
   methods: ["GET", "POST"],
@@ -19,7 +19,7 @@ app.use(helmet());
 
 const preco = 29.9;
 
-// rota teste
+// 🔹 Rota teste
 app.get("/", (req, res) => {
   res.send("M7 Store API online");
 });
@@ -39,7 +39,8 @@ app.post("/create-payment", async (req, res) => {
       },
       {
         headers: {
-          Authorization: `Bearer ${process.env.MP_ACCESS_TOKEN}`
+          Authorization: `Bearer ${process.env.MP_ACCESS_TOKEN}`,
+          "X-Idempotency-Key": Date.now().toString()
         }
       }
     );
@@ -54,17 +55,19 @@ app.post("/create-payment", async (req, res) => {
 
   } catch (err) {
     console.log("Erro ao criar pagamento:", err.response?.data || err.message);
-    res.status(500).send("Erro ao gerar pagamento");
+
+    res.status(500).json({
+      error: err.response?.data || err.message
+    });
   }
 });
 
-// 🔁 WEBHOOK (CONFIRMA PAGAMENTO)
+// 🔁 WEBHOOK (confirma pagamento)
 app.post("/webhook", async (req, res) => {
   try {
     if (req.body.type === "payment") {
       const id = req.body.data.id;
 
-      // consulta pagamento real
       const pagamento = await axios.get(
         `https://api.mercadopago.com/v1/payments/${id}`,
         {
@@ -77,7 +80,6 @@ app.post("/webhook", async (req, res) => {
       if (pagamento.data.status === "approved") {
         const emailCliente = pagamento.data.payer.email;
 
-        // envio de email
         const transporter = nodemailer.createTransport({
           service: "gmail",
           auth: {
@@ -93,7 +95,7 @@ app.post("/webhook", async (req, res) => {
           text: `
 Obrigado pela sua compra!
 
-Aqui estão seus dados:
+Aqui estão seus dados de acesso:
 
 Login: seu@email.com
 Senha: 123456
