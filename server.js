@@ -9,6 +9,10 @@ const rateLimit = require("express-rate-limit");
 
 const app = express();
 
+// 🔥 TRUST PROXY (Render / Vercel)
+app.set("trust proxy", 1);
+
+// ENV
 const PORT = process.env.PORT || 3000;
 const FRONTEND_URL = process.env.FRONTEND_URL;
 const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN;
@@ -17,34 +21,72 @@ const WEBHOOK_URL = process.env.WEBHOOK_URL;
 const PRECO = Number(process.env.PRECO || 29.9);
 const PRODUTO = process.env.PRODUTO || "Pacote de Streaming";
 
-if (!MP_ACCESS_TOKEN) {
-  console.error("ERRO: MP_ACCESS_TOKEN não configurado no .env");
-  process.exit(1);
-}
-
+// Segurança básica
 app.use(helmet());
 app.use(express.json({ limit: "10kb" }));
 
 app.use(
   cors({
     origin: FRONTEND_URL ? [FRONTEND_URL] : "*",
-    methods: ["GET", "POST", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
 
-const limiter = rateLimit({
+// 🔥 RATE LIMIT GLOBAL
+const globalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 20,
-  message: {
-    error: "Muitas tentativas. Tente novamente em alguns minutos.",
-  },
+  max: 100,
 });
+
+app.use(globalLimiter);
+
+// 🔥 RATE LIMIT CRÍTICO (checkout)
+const paymentLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 5,
+  message: { error: "Muitas tentativas. Aguarde alguns minutos." },
+});
+
+// 🧠 ANTIFRAUDE SIMPLES (memória)
+const attempts = new Map();
+
+function checkFraud(ip, email) {
+  const key = `${ip}_${email}`;
+  const now = Date.now();
+
+  if (!attempts.has(key)) {
+    attempts.set(key, { count: 1, time: now });
+    return false;
+  }
+
+  const data = attempts.get(key);
+
+  if (now - data.time > 10 * 60 * 1000) {
+    attempts.set(key, { count: 1, time: now });
+    return false;
+  }
+
+  data.count++;
+
+  if (data.count > 3) {
+    return true;
+  }
+
+  return false;
+}
+
+// 🧾 VALIDAÇÕES
+function validarEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function limparCPF(cpf) {
+  return String(cpf || "").replace(/\D/g, "");
+}
 
 function validarCPF(cpf) {
   if (!cpf) return false;
 
-  cpf = String(cpf).replace(/\D/g, "");
+  cpf = limparCPF(cpf);
 
   if (cpf.length !== 11 || /^(\d)\1+$/.test(cpf)) return false;
 
@@ -70,14 +112,7 @@ function validarCPF(cpf) {
   return resto === Number(cpf[10]);
 }
 
-function limparCPF(cpf) {
-  return String(cpf || "").replace(/\D/g, "");
-}
-
-function validarEmail(email) {
-  return typeof email === "string" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-}
-
+// 🏠 HEALTH CHECK
 app.get("/", (req, res) => {
   res.json({
     status: "online",
@@ -85,23 +120,27 @@ app.get("/", (req, res) => {
   });
 });
 
-app.post("/create-payment", limiter, async (req, res) => {
+// 💰 CRIAR PAGAMENTO PIX
+app.post("/create-payment", paymentLimiter, async (req, res) => {
   try {
+    const ip = req.ip;
     const { email, cpf } = req.body;
 
     if (!validarEmail(email)) {
-      return res.status(400).json({
-        error: "E-mail inválido.",
-      });
+      return res.status(400).json({ error: "E-mail inválido" });
     }
 
     if (!validarCPF(cpf)) {
-      return res.status(400).json({
-        error: "CPF inválido.",
+      return res.status(400).json({ error: "CPF inválido" });
+    }
+
+    // 🔥 antifraude
+    if (checkFraud(ip, email)) {
+      return res.status(429).json({
+        error: "Comportamento suspeito detectado.",
       });
     }
 
-    const cpfLimpo = limparCPF(cpf);
     const orderId = crypto.randomUUID();
     const idempotencyKey = crypto.randomUUID();
 
@@ -110,18 +149,15 @@ app.post("/create-payment", limiter, async (req, res) => {
       description: PRODUTO,
       payment_method_id: "pix",
       payer: {
-        email: email.trim().toLowerCase(),
+        email: email.toLowerCase().trim(),
         identification: {
           type: "CPF",
-          number: cpfLimpo,
+          number: limparCPF(cpf),
         },
       },
       external_reference: orderId,
+      notification_url: WEBHOOK_URL,
     };
-
-    if (WEBHOOK_URL) {
-      payload.notification_url = WEBHOOK_URL;
-    }
 
     const response = await axios.post(
       "https://api.mercadopago.com/v1/payments",
@@ -137,71 +173,51 @@ app.post("/create-payment", limiter, async (req, res) => {
     );
 
     const data = response.data;
-    const transactionData = data?.point_of_interaction?.transaction_data;
+    const tx = data.point_of_interaction?.transaction_data;
 
-    if (!transactionData?.qr_code || !transactionData?.qr_code_base64) {
+    if (!tx) {
       return res.status(500).json({
-        error: "Pagamento criado, mas QR Code não foi retornado.",
-        payment_id: data.id,
+        error: "Erro ao gerar QR Code",
       });
     }
 
-    return res.json({
+    res.json({
       success: true,
       payment_id: data.id,
       status: data.status,
-      order_id: orderId,
-      qr_code: transactionData.qr_code,
-      qr_base64: transactionData.qr_code_base64,
+      qr_code: tx.qr_code,
+      qr_base64: tx.qr_code_base64,
     });
   } catch (err) {
-    const mpError = err.response?.data;
+    console.error("ERRO PAGAMENTO:", err.response?.data || err.message);
 
-    console.error("Erro ao criar pagamento:", mpError || err.message);
-
-    return res.status(err.response?.status || 500).json({
-      error: "Erro ao criar pagamento.",
-      details: mpError?.message || err.message,
+    res.status(err.response?.status || 500).json({
+      error: "Erro ao criar pagamento",
     });
   }
 });
 
-app.get("/payment-status/:id", limiter, async (req, res) => {
+// 🔍 STATUS
+app.get("/payment-status/:id", async (req, res) => {
   try {
-    const paymentId = req.params.id;
-
-    if (!paymentId) {
-      return res.status(400).json({
-        error: "ID do pagamento não informado.",
-      });
-    }
-
     const response = await axios.get(
-      `https://api.mercadopago.com/v1/payments/${paymentId}`,
+      `https://api.mercadopago.com/v1/payments/${req.params.id}`,
       {
         headers: {
           Authorization: `Bearer ${MP_ACCESS_TOKEN}`,
-          "Content-Type": "application/json",
         },
-        timeout: 15000,
       }
     );
 
-    return res.json({
-      payment_id: response.data.id,
+    res.json({
       status: response.data.status,
-      status_detail: response.data.status_detail,
-      external_reference: response.data.external_reference,
     });
-  } catch (err) {
-    console.error("Erro ao verificar pagamento:", err.response?.data || err.message);
-
-    return res.status(err.response?.status || 500).json({
-      error: "Erro ao verificar pagamento.",
-    });
+  } catch {
+    res.status(500).json({ error: "Erro ao verificar pagamento" });
   }
 });
 
+// 🔔 WEBHOOK
 app.post("/webhook", async (req, res) => {
   try {
     const paymentId =
@@ -209,41 +225,32 @@ app.post("/webhook", async (req, res) => {
       req.query?.id ||
       req.query?.["data.id"];
 
-    if (!paymentId) {
-      return res.sendStatus(200);
-    }
+    if (!paymentId) return res.sendStatus(200);
 
     const response = await axios.get(
       `https://api.mercadopago.com/v1/payments/${paymentId}`,
       {
         headers: {
           Authorization: `Bearer ${MP_ACCESS_TOKEN}`,
-          "Content-Type": "application/json",
         },
-        timeout: 15000,
       }
     );
 
     const payment = response.data;
 
     if (payment.status === "approved") {
-      console.log("PAGAMENTO APROVADO:", {
-        id: payment.id,
-        email: payment.payer?.email,
-        valor: payment.transaction_amount,
-        reference: payment.external_reference,
-      });
+      console.log("💰 PAGAMENTO APROVADO:", payment.id);
 
-      // Aqui depois você coloca o envio automático do produto.
+      // 👉 AQUI você envia login/senha automático depois
     }
 
-    return res.sendStatus(200);
-  } catch (err) {
-    console.error("Erro no webhook:", err.response?.data || err.message);
-    return res.sendStatus(200);
+    res.sendStatus(200);
+  } catch {
+    res.sendStatus(200);
   }
 });
 
+// 🚀 START
 app.listen(PORT, () => {
-  console.log(`Servidor rodando na porta ${PORT}`);
+  console.log("Servidor rodando na porta", PORT);
 });
