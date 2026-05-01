@@ -1,11 +1,10 @@
 {
   "name": "m7-store",
   "version": "1.0.0",
-  "description": "Backend da M7 Store com integração Pix Mercado Pago",
+  "description": "Backend M7 Store com Pix Mercado Pago",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node --watch server.js"
+    "start": "node server.js"
   },
   "engines": {
     "node": ">=18"
