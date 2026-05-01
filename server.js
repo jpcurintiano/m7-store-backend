@@ -3,8 +3,17 @@ const express = require("express");
 const axios = require("axios");
 const nodemailer = require("nodemailer");
 const helmet = require("helmet");
+const cors = require("cors");
 
 const app = express();
+
+// 🔐 CORS (libera seu site da Vercel)
+app.use(cors({
+  origin: "https://m7-store.vercel.app",
+  methods: ["GET", "POST"],
+  allowedHeaders: ["Content-Type"]
+}));
+
 app.use(express.json());
 app.use(helmet());
 
@@ -15,7 +24,7 @@ app.get("/", (req, res) => {
   res.send("M7 Store API online");
 });
 
-// criar pagamento PIX
+// 🔥 CRIAR PAGAMENTO PIX
 app.post("/create-payment", async (req, res) => {
   const { email } = req.body;
 
@@ -44,17 +53,18 @@ app.post("/create-payment", async (req, res) => {
     });
 
   } catch (err) {
-    console.log(err.response?.data);
-    res.status(500).send("erro ao criar pagamento");
+    console.log("Erro ao criar pagamento:", err.response?.data || err.message);
+    res.status(500).send("Erro ao gerar pagamento");
   }
 });
 
-// webhook (confirma pagamento)
+// 🔁 WEBHOOK (CONFIRMA PAGAMENTO)
 app.post("/webhook", async (req, res) => {
   try {
     if (req.body.type === "payment") {
       const id = req.body.data.id;
 
+      // consulta pagamento real
       const pagamento = await axios.get(
         `https://api.mercadopago.com/v1/payments/${id}`,
         {
@@ -77,25 +87,34 @@ app.post("/webhook", async (req, res) => {
         });
 
         await transporter.sendMail({
-          from: "M7 Store",
+          from: `"M7 Store" <${process.env.EMAIL_USER}>`,
           to: emailCliente,
           subject: "Seu acesso - M7 Store",
           text: `
+Obrigado pela sua compra!
+
+Aqui estão seus dados:
+
 Login: seu@email.com
 Senha: 123456
+
+Equipe M7 Store
           `
         });
 
-        console.log("Produto enviado");
+        console.log("✅ Produto enviado para:", emailCliente);
       }
     }
 
     res.sendStatus(200);
 
   } catch (err) {
-    console.log(err);
+    console.log("Erro no webhook:", err.message);
     res.sendStatus(500);
   }
 });
 
-app.listen(3000, () => console.log("rodando"));
+// 🚀 START
+app.listen(3000, () => {
+  console.log("Servidor rodando na porta 3000");
+});
