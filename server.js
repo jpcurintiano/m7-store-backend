@@ -7,7 +7,7 @@ const cors = require("cors");
 
 const app = express();
 
-// 🔐 CORS
+// 🔐 CORS (libera seu site da Vercel)
 app.use(cors({
   origin: "https://m7-store.vercel.app",
   methods: ["GET", "POST"],
@@ -46,11 +46,28 @@ app.post("/create-payment", async (req, res) => {
     );
 
     const data = response.data;
-    const pixData = data.point_of_interaction?.transaction_data;
 
+    // 🔍 LOG COMPLETO (debug)
+    console.log("RESPOSTA MP:", JSON.stringify(data, null, 2));
+
+    // 🔥 CAPTURA INTELIGENTE DO PIX
+    const pixData =
+      data.point_of_interaction?.transaction_data ||
+      data.interaction?.transaction_data ||
+      null;
+
+    // ❌ se não veio QR
+    if (!pixData || !pixData.qr_code_base64) {
+      return res.status(500).json({
+        error: "QR Code não retornado pelo Mercado Pago",
+        debug: data
+      });
+    }
+
+    // ✅ resposta correta
     res.json({
-      qr_code: pixData?.qr_code || null,
-      qr_base64: pixData?.qr_code_base64 || null,
+      qr_code: pixData.qr_code,
+      qr_base64: pixData.qr_code_base64,
       id: data.id
     });
 
@@ -103,7 +120,7 @@ Equipe M7 Store
           `
         });
 
-        console.log("✅ Enviado para:", emailCliente);
+        console.log("✅ Produto enviado para:", emailCliente);
       }
     }
 
