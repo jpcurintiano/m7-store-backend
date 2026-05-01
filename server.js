@@ -9,22 +9,22 @@ const rateLimit = require("express-rate-limit");
 
 const app = express();
 
-// 🔥 ESSENCIAL NO RENDER (resolve erro de proxy)
+// 🔥 obrigatório no Render
 app.set("trust proxy", 1);
 
-// 🔐 ENV
+// ENV
 const PORT = process.env.PORT || 3000;
 const FRONTEND_URL = (process.env.FRONTEND_URL || "").replace(/\/$/, "");
 const BASE_URL = (process.env.BASE_URL || "").replace(/\/$/, "");
 const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN;
 
-// 🔗 webhook automático
+// webhook automático
 const WEBHOOK_URL = `${BASE_URL}/webhook`;
 
 const PRECO = Number(process.env.PRECO || 29.9);
 const PRODUTO = process.env.PRODUTO || "Pacote de Streaming";
 
-// 🛡️ Segurança
+// segurança
 app.use(helmet());
 app.use(express.json({ limit: "10kb" }));
 
@@ -33,91 +33,30 @@ app.use(
     origin: FRONTEND_URL
       ? [FRONTEND_URL, `${FRONTEND_URL}/`]
       : "*",
-    methods: ["GET", "POST", "OPTIONS"],
-    allowedHeaders: ["Content-Type"],
   })
 );
 
-// 🚫 Rate limit global
-const globalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100,
-});
+// rate limit global
+app.use(
+  rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 100,
+  })
+);
 
-app.use(globalLimiter);
-
-// 🚫 Rate limit pagamento
+// rate limit pagamento
 const paymentLimiter = rateLimit({
   windowMs: 10 * 60 * 1000,
   max: 5,
-  message: { error: "Muitas tentativas. Aguarde alguns minutos." },
+  message: { error: "Muitas tentativas. Aguarde." },
 });
 
-// 🧠 antifraude simples
-const attempts = new Map();
-
-function checkFraud(ip, email) {
-  const key = `${ip}_${email}`;
-  const now = Date.now();
-
-  if (!attempts.has(key)) {
-    attempts.set(key, { count: 1, time: now });
-    return false;
-  }
-
-  const data = attempts.get(key);
-
-  if (now - data.time > 10 * 60 * 1000) {
-    attempts.set(key, { count: 1, time: now });
-    return false;
-  }
-
-  data.count++;
-
-  return data.count > 3;
-}
-
-// 📧 validar email
+// valida email
 function validarEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
-// 🪪 limpar CPF
-function limparCPF(cpf) {
-  return String(cpf || "").replace(/\D/g, "");
-}
-
-// 🪪 validar CPF
-function validarCPF(cpf) {
-  if (!cpf) return false;
-
-  cpf = limparCPF(cpf);
-
-  if (cpf.length !== 11 || /^(\d)\1+$/.test(cpf)) return false;
-
-  let soma = 0;
-
-  for (let i = 0; i < 9; i++) {
-    soma += Number(cpf[i]) * (10 - i);
-  }
-
-  let resto = (soma * 10) % 11;
-  if (resto === 10) resto = 0;
-  if (resto !== Number(cpf[9])) return false;
-
-  soma = 0;
-
-  for (let i = 0; i < 10; i++) {
-    soma += Number(cpf[i]) * (11 - i);
-  }
-
-  resto = (soma * 10) % 11;
-  if (resto === 10) resto = 0;
-
-  return resto === Number(cpf[10]);
-}
-
-// 🏠 rota base
+// rota base
 app.get("/", (req, res) => {
   res.json({
     status: "online",
@@ -125,24 +64,13 @@ app.get("/", (req, res) => {
   });
 });
 
-// 💰 CRIAR PIX
+// 💰 CRIAR PIX (SEM CPF)
 app.post("/create-payment", paymentLimiter, async (req, res) => {
   try {
-    const ip = req.ip;
-    const { email, cpf } = req.body;
+    const { email } = req.body;
 
     if (!validarEmail(email)) {
       return res.status(400).json({ error: "E-mail inválido" });
-    }
-
-    if (!validarCPF(cpf)) {
-      return res.status(400).json({ error: "CPF inválido" });
-    }
-
-    if (checkFraud(ip, email)) {
-      return res.status(429).json({
-        error: "Comportamento suspeito detectado.",
-      });
     }
 
     const orderId = crypto.randomUUID();
@@ -154,10 +82,8 @@ app.post("/create-payment", paymentLimiter, async (req, res) => {
       payment_method_id: "pix",
       payer: {
         email: email.toLowerCase().trim(),
-        identification: {
-          type: "CPF",
-          number: limparCPF(cpf),
-        },
+        first_name: "Cliente",
+        last_name: "M7",
       },
       external_reference: orderId,
       notification_url: WEBHOOK_URL,
@@ -193,15 +119,17 @@ app.post("/create-payment", paymentLimiter, async (req, res) => {
       qr_base64: tx.qr_code_base64,
     });
   } catch (err) {
-    console.error("ERRO PAGAMENTO:", err.response?.data || err.message);
+    console.log("STATUS:", err.response?.status);
+    console.log("DATA:", err.response?.data);
+    console.log("MSG:", err.message);
 
     res.status(err.response?.status || 500).json({
-      error: "Erro ao criar pagamento",
+      error: err.response?.data || "Erro ao criar pagamento",
     });
   }
 });
 
-// 🔍 verificar status
+// status pagamento
 app.get("/payment-status/:id", async (req, res) => {
   try {
     const response = await axios.get(
@@ -221,7 +149,7 @@ app.get("/payment-status/:id", async (req, res) => {
   }
 });
 
-// 🔔 webhook
+// webhook
 app.post("/webhook", async (req, res) => {
   try {
     const paymentId =
@@ -252,7 +180,7 @@ app.post("/webhook", async (req, res) => {
   }
 });
 
-// 🚀 start
+// start
 app.listen(PORT, () => {
   console.log("Servidor rodando na porta", PORT);
 });
